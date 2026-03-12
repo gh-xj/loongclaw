@@ -499,6 +499,7 @@ mod tests {
             tools: ToolConfig::default(),
             external_skills: ExternalSkillsConfig::default(),
             memory: MemoryConfig::default(),
+            acp: crate::config::AcpConfig::default(),
         };
 
         let messages =
@@ -518,6 +519,7 @@ mod tests {
             tools: ToolConfig::default(),
             external_skills: ExternalSkillsConfig::default(),
             memory: MemoryConfig::default(),
+            acp: crate::config::AcpConfig::default(),
         };
 
         let messages =
@@ -554,6 +556,7 @@ mod tests {
             tools: ToolConfig::default(),
             external_skills: ExternalSkillsConfig::default(),
             memory: MemoryConfig::default(),
+            acp: crate::config::AcpConfig::default(),
         };
 
         let session_id = format!(
@@ -635,6 +638,7 @@ mod tests {
             tools: ToolConfig::default(),
             external_skills: ExternalSkillsConfig::default(),
             memory: MemoryConfig::default(),
+            acp: crate::config::AcpConfig::default(),
         };
 
         let session_id = format!(
@@ -805,6 +809,7 @@ mod tests {
             tools: ToolConfig::default(),
             external_skills: ExternalSkillsConfig::default(),
             memory: MemoryConfig::default(),
+            acp: crate::config::AcpConfig::default(),
         };
         config.provider.reasoning_effort = Some(ReasoningEffort::High);
 
@@ -830,6 +835,7 @@ mod tests {
             tools: ToolConfig::default(),
             external_skills: ExternalSkillsConfig::default(),
             memory: MemoryConfig::default(),
+            acp: crate::config::AcpConfig::default(),
             conversation: crate::config::ConversationConfig::default(),
         };
         config.provider.reasoning_effort = Some(ReasoningEffort::High);
@@ -870,6 +876,7 @@ mod tests {
             tools: ToolConfig::default(),
             external_skills: ExternalSkillsConfig::default(),
             memory: MemoryConfig::default(),
+            acp: crate::config::AcpConfig::default(),
         };
 
         let body = build_completion_request_body(
@@ -929,6 +936,7 @@ mod tests {
             tools: ToolConfig::default(),
             external_skills: ExternalSkillsConfig::default(),
             memory: MemoryConfig::default(),
+            acp: crate::config::AcpConfig::default(),
         };
 
         let body = build_turn_request_body(
@@ -1130,6 +1138,7 @@ mod tests {
             tools: ToolConfig::default(),
             external_skills: ExternalSkillsConfig::default(),
             memory: MemoryConfig::default(),
+            acp: crate::config::AcpConfig::default(),
             conversation: crate::config::ConversationConfig::default(),
         };
         let error = validate_provider_configuration(&config).expect_err("misconfig should fail");
@@ -1152,6 +1161,7 @@ mod tests {
             tools: ToolConfig::default(),
             external_skills: ExternalSkillsConfig::default(),
             memory: MemoryConfig::default(),
+            acp: crate::config::AcpConfig::default(),
             conversation: crate::config::ConversationConfig::default(),
         };
         let error = validate_provider_configuration(&config).expect_err("invalid ua");
