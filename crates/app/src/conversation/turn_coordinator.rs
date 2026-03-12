@@ -253,7 +253,7 @@ impl ConversationTurnCoordinator {
             ExecutionLane::Safe => config.conversation.safe_lane_max_tool_steps(),
         };
 
-        let provider_result = runtime.request_turn(config, &messages).await;
+        let provider_result = runtime.request_turn(config, &messages, kernel_ctx).await;
         match provider_result {
             Ok(turn) => {
                 let had_tool_intents = !turn.tool_intents.is_empty();
@@ -294,7 +294,7 @@ impl ConversationTurnCoordinator {
                                 user_input,
                             );
                             match runtime
-                                .request_completion(config, &follow_up_messages)
+                                .request_completion(config, &follow_up_messages, kernel_ctx)
                                 .await
                             {
                                 Ok(final_reply) => {
@@ -324,7 +324,7 @@ impl ConversationTurnCoordinator {
                             user_input,
                         );
                         match runtime
-                            .request_completion(config, &follow_up_messages)
+                            .request_completion(config, &follow_up_messages, kernel_ctx)
                             .await
                         {
                             Ok(final_reply) => {
@@ -353,7 +353,7 @@ impl ConversationTurnCoordinator {
                             user_input,
                         );
                         match runtime
-                            .request_completion(config, &follow_up_messages)
+                            .request_completion(config, &follow_up_messages, kernel_ctx)
                             .await
                         {
                             Ok(final_reply) => {

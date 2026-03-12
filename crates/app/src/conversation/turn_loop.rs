@@ -67,7 +67,7 @@ impl ConversationTurnLoop {
         );
 
         for round_index in 0..policy.max_rounds {
-            let turn = match runtime.request_turn(config, &messages).await {
+            let turn = match runtime.request_turn(config, &messages, kernel_ctx).await {
                 Ok(turn) => turn,
                 Err(error) => {
                     return match error_mode {
@@ -138,6 +138,7 @@ impl ConversationTurnLoop {
                                 runtime,
                                 config,
                                 &messages,
+                                kernel_ctx,
                                 raw_reply.as_str(),
                             )
                             .await
@@ -167,6 +168,7 @@ impl ConversationTurnLoop {
                                 runtime,
                                 config,
                                 &messages,
+                                kernel_ctx,
                                 raw_reply.as_str(),
                             )
                             .await
@@ -199,6 +201,7 @@ impl ConversationTurnLoop {
                                 runtime,
                                 config,
                                 &messages,
+                                kernel_ctx,
                                 raw_reply.as_str(),
                             )
                             .await
@@ -228,6 +231,7 @@ impl ConversationTurnLoop {
                                 runtime,
                                 config,
                                 &messages,
+                                kernel_ctx,
                                 raw_reply.as_str(),
                             )
                             .await
@@ -260,6 +264,7 @@ impl ConversationTurnLoop {
                                 runtime,
                                 config,
                                 &messages,
+                                kernel_ctx,
                                 raw_reply.as_str(),
                             )
                             .await
@@ -289,6 +294,7 @@ impl ConversationTurnLoop {
                                 runtime,
                                 config,
                                 &messages,
+                                kernel_ctx,
                                 raw_reply.as_str(),
                             )
                             .await
@@ -424,9 +430,13 @@ async fn request_completion_with_raw_fallback<R: ConversationRuntime + ?Sized>(
     runtime: &R,
     config: &LoongClawConfig,
     messages: &[Value],
+    kernel_ctx: Option<&KernelContext>,
     raw_reply: &str,
 ) -> String {
-    match runtime.request_completion(config, messages).await {
+    match runtime
+        .request_completion(config, messages, kernel_ctx)
+        .await
+    {
         Ok(final_reply) => {
             let trimmed = final_reply.trim();
             if trimmed.is_empty() {
