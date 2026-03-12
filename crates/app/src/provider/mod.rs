@@ -711,6 +711,7 @@ mod tests {
             external_skills: ExternalSkillsConfig::default(),
             memory: MemoryConfig::default(),
             conversation: crate::config::ConversationConfig::default(),
+            ..LoongClawConfig::default()
         };
         config.cli.personality = Some(crate::prompt::PromptPersonality::FriendlyCollab);
         config.cli.system_prompt = String::new();
@@ -734,6 +735,7 @@ mod tests {
             external_skills: ExternalSkillsConfig::default(),
             memory: MemoryConfig::default(),
             conversation: crate::config::ConversationConfig::default(),
+            ..LoongClawConfig::default()
         };
         config.cli.prompt_pack_id = None;
         config.cli.personality = None;
@@ -765,6 +767,7 @@ mod tests {
             external_skills: ExternalSkillsConfig::default(),
             memory: MemoryConfig::default(),
             conversation: crate::config::ConversationConfig::default(),
+            ..LoongClawConfig::default()
         };
         config.memory.sqlite_path = db_path.display().to_string();
         config.memory.profile = crate::config::MemoryProfile::WindowPlusSummary;
