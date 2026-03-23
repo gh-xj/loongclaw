@@ -679,9 +679,7 @@ struct ToolRoundOutcome {
 
 fn tool_round_outcome(turn_result: &TurnResult) -> Option<ToolRoundOutcome> {
     match turn_result {
-        TurnResult::FinalText(text)
-        | TurnResult::StreamingText(text)
-        | TurnResult::StreamingDone(text) => Some(ToolRoundOutcome {
+        TurnResult::FinalText(text) => Some(ToolRoundOutcome {
             fingerprint: text_fingerprint("tool_final_text", text),
             failed: false,
         }),

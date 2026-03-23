@@ -192,8 +192,6 @@ impl fmt::Display for TurnFailure {
 #[non_exhaustive]
 pub enum TurnResult {
     FinalText(String),
-    StreamingText(String),
-    StreamingDone(String),
     NeedsApproval(ApprovalRequirement),
     ToolDenied(TurnFailure),
     ToolError(TurnFailure),
@@ -219,10 +217,7 @@ impl TurnResult {
 
     pub fn failure(&self) -> Option<&TurnFailure> {
         match self {
-            TurnResult::FinalText(_)
-            | TurnResult::StreamingText(_)
-            | TurnResult::StreamingDone(_)
-            | TurnResult::NeedsApproval(_) => None,
+            TurnResult::FinalText(_) | TurnResult::NeedsApproval(_) => None,
             TurnResult::ToolDenied(failure)
             | TurnResult::ToolError(failure)
             | TurnResult::ProviderError(failure) => Some(failure),
@@ -1995,8 +1990,6 @@ mod tests {
                     .expect("approval request id should be present")
             }
             other @ TurnResult::FinalText(_)
-            | other @ TurnResult::StreamingText(_)
-            | other @ TurnResult::StreamingDone(_)
             | other @ TurnResult::ToolDenied(_)
             | other @ TurnResult::ToolError(_)
             | other @ TurnResult::ProviderError(_) => {
@@ -2060,8 +2053,6 @@ mod tests {
                     .expect("approval request id should be present")
             }
             other @ TurnResult::FinalText(_)
-            | other @ TurnResult::StreamingText(_)
-            | other @ TurnResult::StreamingDone(_)
             | other @ TurnResult::ToolDenied(_)
             | other @ TurnResult::ToolError(_)
             | other @ TurnResult::ProviderError(_) => {
@@ -2131,8 +2122,6 @@ mod tests {
                 .approval_request_id
                 .expect("first approval request id"),
             other @ TurnResult::FinalText(_)
-            | other @ TurnResult::StreamingText(_)
-            | other @ TurnResult::StreamingDone(_)
             | other @ TurnResult::ToolDenied(_)
             | other @ TurnResult::ToolError(_)
             | other @ TurnResult::ProviderError(_) => {
@@ -2144,8 +2133,6 @@ mod tests {
                 .approval_request_id
                 .expect("second approval request id"),
             other @ TurnResult::FinalText(_)
-            | other @ TurnResult::StreamingText(_)
-            | other @ TurnResult::StreamingDone(_)
             | other @ TurnResult::ToolDenied(_)
             | other @ TurnResult::ToolError(_)
             | other @ TurnResult::ProviderError(_) => {
@@ -2219,8 +2206,6 @@ mod tests {
                     .expect("approval request id should exist")
             }
             other @ TurnResult::FinalText(_)
-            | other @ TurnResult::StreamingText(_)
-            | other @ TurnResult::StreamingDone(_)
             | other @ TurnResult::ToolDenied(_)
             | other @ TurnResult::ToolError(_)
             | other @ TurnResult::ProviderError(_) => {
@@ -2315,9 +2300,7 @@ mod tests {
             other @ TurnResult::NeedsApproval(_)
             | other @ TurnResult::ToolDenied(_)
             | other @ TurnResult::ToolError(_)
-            | other @ TurnResult::ProviderError(_)
-            | other @ TurnResult::StreamingText(_)
-            | other @ TurnResult::StreamingDone(_) => {
+            | other @ TurnResult::ProviderError(_) => {
                 panic!("expected FinalText, got {other:?}")
             }
         };
@@ -2415,9 +2398,7 @@ mod tests {
             other @ TurnResult::NeedsApproval(_)
             | other @ TurnResult::ToolDenied(_)
             | other @ TurnResult::ToolError(_)
-            | other @ TurnResult::ProviderError(_)
-            | other @ TurnResult::StreamingText(_)
-            | other @ TurnResult::StreamingDone(_) => {
+            | other @ TurnResult::ProviderError(_) => {
                 panic!("expected FinalText, got {other:?}")
             }
         };
@@ -2517,9 +2498,7 @@ mod tests {
             other @ TurnResult::NeedsApproval(_)
             | other @ TurnResult::ToolDenied(_)
             | other @ TurnResult::ToolError(_)
-            | other @ TurnResult::ProviderError(_)
-            | other @ TurnResult::StreamingText(_)
-            | other @ TurnResult::StreamingDone(_) => {
+            | other @ TurnResult::ProviderError(_) => {
                 panic!("expected FinalText, got {other:?}")
             }
         };

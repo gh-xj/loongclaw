@@ -119,11 +119,13 @@ pub fn extract_provider_turn_with_scope_and_messages(
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct ProviderToolBridgeContext {
+pub(super) struct ProviderToolBridgeContext {
     discoverable_leases: BTreeMap<String, String>,
 }
 
-fn provider_tool_bridge_context_from_messages(messages: &[Value]) -> ProviderToolBridgeContext {
+pub(super) fn provider_tool_bridge_context_from_messages(
+    messages: &[Value],
+) -> ProviderToolBridgeContext {
     messages
         .iter()
         .rev()
@@ -234,7 +236,7 @@ fn extract_body_content_text(body: &Value) -> Option<String> {
     body_content_value(body).and_then(extract_content_text)
 }
 
-fn build_provider_tool_intent(
+pub(super) fn build_provider_tool_intent(
     raw_tool_name: &str,
     args_json: Value,
     source: &str,

@@ -12,7 +12,7 @@ use serde_json::Value;
 use tokio::time::sleep;
 
 use crate::config::ProviderConfig;
-use crate::conversation::turn_engine::{ProviderTurn, ToolIntent};
+use crate::conversation::turn_engine::ProviderTurn;
 
 use super::{
     auth_profile_runtime::ProviderAuthProfile,
@@ -884,7 +884,7 @@ pub(super) async fn execute_streaming_turn_request<PreStatusError>(
     build_body: impl FnMut(CompletionPayloadMode) -> Value + Unpin,
     session_id: Option<&str>,
     turn_id: Option<&str>,
-    _messages: &[Value],
+    messages: &[Value],
     on_token: StreamingTokenCallback,
     mut pre_status_error: PreStatusError,
 ) -> Result<ProviderTurn, ModelRequestError>
@@ -1049,6 +1049,8 @@ where
         ));
     }
 
+    let bridge_context = super::shape::provider_tool_bridge_context_from_messages(messages);
+
     let tool_intents = accumulator
         .tool_calls
         .values()
@@ -1066,14 +1068,15 @@ where
                     None,
                 )
             })?;
-            Ok(ToolIntent {
-                tool_name: tool_call.name.clone(),
+            Ok(super::shape::build_provider_tool_intent(
+                &tool_call.name,
                 args_json,
-                source: "provider_tool_call".to_owned(),
-                session_id: session_id.unwrap_or("").to_owned(),
-                turn_id: turn_id.unwrap_or("").to_owned(),
-                tool_call_id: tool_call.id.clone(),
-            })
+                "provider_tool_call",
+                session_id,
+                turn_id,
+                tool_call.id.clone(),
+                &bridge_context,
+            ))
         })
         .collect::<Result<Vec<_>, _>>()?;
 
@@ -1466,5 +1469,240 @@ mod tests {
 
         let final_text = accumulator.text.clone();
         assert_eq!(final_text, "Hello World");
+    }
+
+    /// Helper: build an SSE byte chunk from event lines.
+    fn sse_chunk(lines: &[&str]) -> Bytes {
+        let mut s = String::new();
+        for line in lines {
+            s.push_str(line);
+            s.push('\n');
+        }
+        s.push('\n');
+        Bytes::from(s)
+    }
+
+    #[tokio::test]
+    async fn streaming_sse_parser_assembles_text_turn() {
+        let chunks = vec![
+            sse_chunk(&[
+                "event: message_start",
+                r#"data: {"type":"message_start","message":{"model":"claude-3","usage":{"input_tokens":10}}}"#,
+            ]),
+            sse_chunk(&[
+                "event: content_block_delta",
+                r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}"#,
+            ]),
+            sse_chunk(&[
+                "event: content_block_delta",
+                r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" World"}}"#,
+            ]),
+            sse_chunk(&[
+                "event: message_delta",
+                r#"data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}"#,
+            ]),
+            sse_chunk(&["event: message_stop", r#"data: {"type":"message_stop"}"#]),
+        ];
+        let byte_stream =
+            futures_util::stream::iter(chunks.into_iter().map(Ok::<_, RequestExecutionError>));
+
+        let parse_fn = |data: Value| -> Option<StreamingEvent> {
+            let event_type = data.get("type").and_then(|v| v.as_str())?;
+            if event_type == "content_block_delta" {
+                let delta = data.get("delta")?;
+                let delta_type = delta.get("type").and_then(|v| v.as_str())?;
+                if delta_type == "text_delta" {
+                    let text = delta.get("text").and_then(|v| v.as_str())?;
+                    return Some(StreamingEvent::Text(text.to_owned()));
+                }
+            }
+            if event_type == "message_stop" {
+                return Some(StreamingEvent::Done);
+            }
+            if event_type == "message_start" || event_type == "message_delta" {
+                return Some(StreamingEvent::Meta(data));
+            }
+            None
+        };
+
+        let parser = SseByteStreamParser::new(Box::pin(byte_stream), parse_fn);
+        futures_util::pin_mut!(parser);
+
+        let mut text = String::new();
+        let mut meta_events = 0;
+        let mut done = false;
+        while let Some(item) = futures_util::StreamExt::next(&mut parser).await {
+            match item.unwrap() {
+                StreamingEvent::Text(t) => text.push_str(&t),
+                StreamingEvent::Meta(_) => meta_events += 1,
+                StreamingEvent::Done => {
+                    done = true;
+                    break;
+                }
+                StreamingEvent::ToolCallStart { .. }
+                | StreamingEvent::ToolInputPartial { .. }
+                | StreamingEvent::StreamError(_) => {}
+            }
+        }
+
+        assert_eq!(text, "Hello World");
+        assert!(done, "should have received Done event");
+        assert_eq!(
+            meta_events, 2,
+            "should have received message_start + message_delta"
+        );
+    }
+
+    #[tokio::test]
+    async fn streaming_sse_parser_assembles_tool_call_turn() {
+        let chunks = vec![
+            sse_chunk(&[
+                "event: content_block_start",
+                r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"call_abc","name":"get_weather"}}"#,
+            ]),
+            sse_chunk(&[
+                "event: content_block_delta",
+                r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"loc"}}"#,
+            ]),
+            sse_chunk(&[
+                "event: content_block_delta",
+                r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"ation\":\"NYC\"}"}}"#,
+            ]),
+            sse_chunk(&[
+                "event: content_block_start",
+                r#"data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"call_def","name":"get_time"}}"#,
+            ]),
+            sse_chunk(&[
+                "event: content_block_delta",
+                r#"data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{}"}}"#,
+            ]),
+            sse_chunk(&["event: message_stop", r#"data: {"type":"message_stop"}"#]),
+        ];
+        let byte_stream =
+            futures_util::stream::iter(chunks.into_iter().map(Ok::<_, RequestExecutionError>));
+
+        let parse_fn = |data: Value| -> Option<StreamingEvent> {
+            let event_type = data.get("type").and_then(|v| v.as_str())?;
+            if event_type == "content_block_start" {
+                let cb = data.get("content_block")?;
+                if cb.get("type").and_then(|v| v.as_str()) == Some("tool_use") {
+                    let name = cb.get("name").and_then(|v| v.as_str())?.to_owned();
+                    let id = cb.get("id").and_then(|v| v.as_str())?.to_owned();
+                    let index = data.get("index").and_then(|v| v.as_u64())? as usize;
+                    return Some(StreamingEvent::ToolCallStart { index, name, id });
+                }
+            }
+            if event_type == "content_block_delta" {
+                let delta = data.get("delta")?;
+                if delta.get("type").and_then(|v| v.as_str()) == Some("input_json_delta") {
+                    let partial = delta.get("partial_json").and_then(|v| v.as_str())?;
+                    let index = data.get("index").and_then(|v| v.as_u64())? as usize;
+                    return Some(StreamingEvent::ToolInputPartial {
+                        index,
+                        partial_json: partial.to_owned(),
+                    });
+                }
+            }
+            if event_type == "message_stop" {
+                return Some(StreamingEvent::Done);
+            }
+            None
+        };
+
+        let parser = SseByteStreamParser::new(Box::pin(byte_stream), parse_fn);
+        futures_util::pin_mut!(parser);
+
+        let mut accumulator = StreamingAccumulator::default();
+        while let Some(item) = futures_util::StreamExt::next(&mut parser).await {
+            match item.unwrap() {
+                StreamingEvent::ToolCallStart { index, name, id } => {
+                    accumulator.tool_calls.insert(
+                        index,
+                        ToolCallInfo {
+                            name,
+                            id,
+                            input: String::new(),
+                        },
+                    );
+                }
+                StreamingEvent::ToolInputPartial {
+                    index,
+                    partial_json,
+                } => {
+                    if let Some(tc) = accumulator.tool_calls.get_mut(&index) {
+                        tc.input.push_str(&partial_json);
+                    }
+                }
+                StreamingEvent::Done => {
+                    accumulator.done = true;
+                    break;
+                }
+                StreamingEvent::Text(_)
+                | StreamingEvent::Meta(_)
+                | StreamingEvent::StreamError(_) => {}
+            }
+        }
+
+        assert!(accumulator.done);
+        assert_eq!(accumulator.tool_calls.len(), 2);
+
+        let tc0 = &accumulator.tool_calls[&0];
+        assert_eq!(tc0.name, "get_weather");
+        assert_eq!(tc0.id, "call_abc");
+        assert_eq!(tc0.input, r#"{"location":"NYC"}"#);
+
+        let tc1 = &accumulator.tool_calls[&1];
+        assert_eq!(tc1.name, "get_time");
+        assert_eq!(tc1.id, "call_def");
+        assert_eq!(tc1.input, "{}");
+    }
+
+    #[tokio::test]
+    async fn streaming_sse_parser_handles_error_event() {
+        let chunks = vec![
+            sse_chunk(&[
+                "event: content_block_delta",
+                r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi"}}"#,
+            ]),
+            sse_chunk(&[
+                "event: error",
+                r#"data: {"type":"error","error":{"type":"overloaded_error","message":"Server overloaded"}}"#,
+            ]),
+        ];
+        let byte_stream =
+            futures_util::stream::iter(chunks.into_iter().map(Ok::<_, RequestExecutionError>));
+
+        let parse_fn = |data: Value| -> Option<StreamingEvent> {
+            let event_type = data.get("type").and_then(|v| v.as_str())?;
+            if event_type == "content_block_delta" {
+                let delta = data.get("delta")?;
+                if delta.get("type").and_then(|v| v.as_str()) == Some("text_delta") {
+                    let text = delta.get("text").and_then(|v| v.as_str())?;
+                    return Some(StreamingEvent::Text(text.to_owned()));
+                }
+            }
+            if event_type == "error" {
+                let message = data
+                    .get("error")
+                    .and_then(|e| e.get("message"))
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("unknown")
+                    .to_owned();
+                return Some(StreamingEvent::StreamError(message));
+            }
+            None
+        };
+
+        let parser = SseByteStreamParser::new(Box::pin(byte_stream), parse_fn);
+        futures_util::pin_mut!(parser);
+
+        let mut events = vec![];
+        while let Some(item) = futures_util::StreamExt::next(&mut parser).await {
+            events.push(item.unwrap());
+        }
+
+        assert_eq!(events.len(), 2);
+        assert!(matches!(&events[0], StreamingEvent::Text(t) if t == "Hi"));
+        assert!(matches!(&events[1], StreamingEvent::StreamError(m) if m == "Server overloaded"));
     }
 }
