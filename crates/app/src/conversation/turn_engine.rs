@@ -61,6 +61,36 @@ pub struct ToolIntent {
     pub tool_call_id: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct TurnContext {
+    app_config: Arc<LoongClawConfig>,
+    session_context: SessionContext,
+}
+
+impl TurnContext {
+    pub fn new(app_config: Arc<LoongClawConfig>, session_context: SessionContext) -> Self {
+        Self {
+            app_config,
+            session_context,
+        }
+    }
+
+    pub fn config(&self) -> &LoongClawConfig {
+        self.app_config.as_ref()
+    }
+
+    pub fn tool_config(&self) -> &ToolConfig {
+        &self.app_config.tools
+    }
+
+    pub fn tool_view(&self) -> &ToolView {
+        &self.session_context.tool_view
+    }
+
+    pub fn session_context(&self) -> &SessionContext {
+        &self.session_context
+    }
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolDecision {
     pub allow: bool,
@@ -3546,6 +3576,32 @@ mod tests {
 
     fn kernel_context(agent_id: &str) -> KernelContext {
         test_kernel_context(agent_id)
+    }
+
+    #[test]
+    fn turn_context_owns_config_snapshot() {
+        let mut config = LoongClawConfig::default();
+        config.tools.file_root = Some("/tmp/turn-context-snapshot-root".to_owned());
+        let session_context = SessionContext::root_with_tool_view(
+            "session-turn-context-snapshot",
+            runtime_tool_view_for_config(&config.tools),
+        );
+
+        let turn_context =
+            TurnContext::new(std::sync::Arc::new(config.clone()), session_context.clone());
+
+        config.tools.file_root = Some("/tmp/turn-context-mutated-root".to_owned());
+
+        assert_eq!(
+            turn_context.config().tools.file_root.as_deref(),
+            Some("/tmp/turn-context-snapshot-root")
+        );
+        assert_eq!(
+            turn_context.tool_config().file_root.as_deref(),
+            Some("/tmp/turn-context-snapshot-root")
+        );
+        assert_eq!(turn_context.session_context(), &session_context);
+        assert_eq!(turn_context.tool_view(), &session_context.tool_view);
     }
 
     #[test]
