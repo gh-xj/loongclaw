@@ -15,7 +15,8 @@ use super::runtime::{ConversationRuntime, DefaultConversationRuntime};
 use super::runtime_binding::ConversationRuntimeBinding;
 use super::turn_budget::{TurnRoundBudget, TurnRoundBudgetDecision};
 use super::turn_engine::{
-    DefaultAppToolDispatcher, ProviderTurn, ToolIntent, TurnEngine, TurnResult, TurnValidation,
+    DefaultAppToolDispatcher, ProviderTurn, ToolIntent, TurnContext, TurnEngine, TurnResult,
+    TurnValidation,
 };
 use super::turn_observer::map_streaming_callback_data_to_token_event;
 use super::turn_shared::{
@@ -116,17 +117,25 @@ impl ConversationTurnLoop {
         runtime: &R,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<String> {
-        let policy = TurnLoopPolicy::from_config(config);
-        let session_context = runtime.session_context(config, session_id, binding)?;
-        let tool_view = session_context.tool_view.clone();
+        let turn_context = TurnContext::new(
+            Arc::new(config.clone()),
+            runtime.session_context(config, session_id, binding)?,
+        );
+        let policy = TurnLoopPolicy::from_config(turn_context.config());
         let app_dispatcher = DefaultAppToolDispatcher::with_config(
-            MemoryRuntimeConfig::from_memory_config(&config.memory),
-            config.clone(),
+            MemoryRuntimeConfig::from_memory_config(&turn_context.config().memory),
+            turn_context.config().clone(),
         );
         let turn_id = super::turn_shared::next_conversation_turn_id();
         let mut session = initialize_turn_loop_session(
             runtime
-                .build_messages(config, session_id, true, &tool_view, binding)
+                .build_messages(
+                    turn_context.config(),
+                    session_id,
+                    true,
+                    turn_context.tool_view(),
+                    binding,
+                )
                 .await?,
             user_input,
             &policy,
@@ -149,11 +158,11 @@ impl ConversationTurnLoop {
                 if use_streaming {
                     runtime
                         .request_turn_streaming(
-                            config,
+                            turn_context.config(),
                             session_id,
                             turn_id.as_str(),
                             &session.messages,
-                            &tool_view,
+                            turn_context.tool_view(),
                             binding,
                             on_token,
                         )
@@ -161,11 +170,11 @@ impl ConversationTurnLoop {
                 } else {
                     runtime
                         .request_turn(
-                            config,
+                            turn_context.config(),
                             session_id,
                             turn_id.as_str(),
                             &session.messages,
-                            &tool_view,
+                            turn_context.tool_view(),
                             binding,
                         )
                         .await
@@ -221,10 +230,10 @@ impl ConversationTurnLoop {
             }
 
             let evaluation = evaluate_round_kernel(
-                config,
+                turn_context.config(),
                 &policy,
                 &turn,
-                &session_context,
+                turn_context.session_context(),
                 &app_dispatcher,
                 binding,
                 &mut session.loop_supervisor,
@@ -245,7 +254,7 @@ impl ConversationTurnLoop {
 
             if let Some(action) = resolve_round_kernel_terminal_action(
                 runtime,
-                config,
+                turn_context.config(),
                 &mut session,
                 user_input,
                 decision,

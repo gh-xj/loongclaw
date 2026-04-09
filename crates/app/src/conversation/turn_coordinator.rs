@@ -104,8 +104,8 @@ use super::turn_checkpoint::{
 };
 use super::turn_engine::{
     AppToolDispatcher, DefaultAppToolDispatcher, ProviderTurn, ToolBatchExecutionIntentStatus,
-    ToolBatchExecutionTrace, ToolExecutionPreflight, ToolIntent, TurnEngine, TurnFailure,
-    TurnFailureKind, TurnResult, TurnValidation, effective_result_tool_name,
+    ToolBatchExecutionTrace, ToolExecutionPreflight, ToolIntent, TurnContext, TurnEngine,
+    TurnFailure, TurnFailureKind, TurnResult, TurnValidation, effective_result_tool_name,
 };
 use super::turn_observer::{
     ConversationTurnObserverHandle, ConversationTurnPhase, ConversationTurnPhaseEvent,
@@ -748,7 +748,7 @@ struct ProviderTurnContinuePhase {
     lane_execution: ProviderTurnLaneExecution,
     reply_phase: ToolDrivenReplyPhase,
     loop_verdict: Option<ProviderTurnLoopVerdict>,
-    followup_config: LoongClawConfig,
+    turn_context: TurnContext,
     ingress: Option<ConversationIngressContext>,
 }
 
@@ -757,7 +757,7 @@ impl ProviderTurnContinuePhase {
         tool_intents: usize,
         lane_execution: ProviderTurnLaneExecution,
         loop_verdict: Option<ProviderTurnLoopVerdict>,
-        followup_config: LoongClawConfig,
+        turn_context: TurnContext,
         ingress: Option<&ConversationIngressContext>,
     ) -> Self {
         let reply_phase = lane_execution.reply_phase();
@@ -766,7 +766,7 @@ impl ProviderTurnContinuePhase {
             lane_execution,
             reply_phase,
             loop_verdict,
-            followup_config,
+            turn_context,
             ingress: ingress.cloned(),
         }
     }
@@ -824,7 +824,7 @@ impl ProviderTurnContinuePhase {
     ) -> ResolvedProviderTurn {
         resolve_provider_turn_reply(
             runtime,
-            &self.followup_config,
+            &self.turn_context,
             session_id,
             preparation,
             self,
@@ -1799,17 +1799,19 @@ impl ConversationTurnCoordinator {
                 runtime.bootstrap(config, session_id, kernel_ctx).await?;
             }
 
-            let session_context = runtime.session_context(config, session_id, binding)?;
-            let tool_view = session_context.tool_view.clone();
+            let turn_context = TurnContext::new(
+                std::sync::Arc::new(config.clone()),
+                runtime.session_context(config, session_id, binding)?,
+            );
             let visible_ingress = ingress.filter(|value| value.has_contextual_hints());
             emit_turn_ingress_event(runtime, session_id, visible_ingress, binding).await;
 
             let turn_id = next_conversation_turn_id();
             let assembled_context = runtime
-                .build_context(config, session_id, true, binding)
+                .build_context(turn_context.config(), session_id, true, binding)
                 .await?;
             let preparation = ProviderTurnPreparation::from_assembled_context_with_turn_id(
-                config,
+                turn_context.config(),
                 assembled_context,
                 user_input,
                 turn_id.as_str(),
@@ -1832,18 +1834,18 @@ impl ConversationTurnCoordinator {
             observe_turn_phase(observer.as_ref(), initial_request_event);
 
             let provider_turn_result = request_provider_turn_with_observer(
-                config,
+                turn_context.config(),
                 runtime,
                 session_id,
                 preparation.turn_id.as_str(),
                 &preparation.session.messages,
-                &tool_view,
+                turn_context.tool_view(),
                 binding,
                 observer.as_ref(),
             )
             .await;
             let resolved_turn = resolve_provider_turn(
-                config,
+                &turn_context,
                 runtime,
                 session_id,
                 user_input,
@@ -1857,7 +1859,7 @@ impl ConversationTurnCoordinator {
             .await;
 
             apply_resolved_provider_turn(
-                config,
+                turn_context.config(),
                 runtime,
                 session_id,
                 user_input,
@@ -1916,12 +1918,16 @@ impl ConversationTurnCoordinator {
 
         observe_turn_phase(observer, ConversationTurnPhaseEvent::preparing());
         let session_context = runtime.session_context(config, session_id, binding)?;
+        let turn_context = TurnContext::new(
+            std::sync::Arc::new(config.clone()),
+            session_context.clone(),
+        );
         let assembled_context = runtime
-            .build_context(config, session_id, true, binding)
+            .build_context(turn_context.config(), session_id, true, binding)
             .await?;
         let turn_id = next_conversation_turn_id();
         let preparation = ProviderTurnPreparation::from_assembled_context_with_turn_id(
-            config,
+            turn_context.config(),
             assembled_context,
             user_input,
             turn_id.as_str(),
@@ -1968,7 +1974,7 @@ impl ConversationTurnCoordinator {
         };
 
         let resolved_turn = resolve_provider_turn(
-            config,
+            &turn_context,
             runtime,
             session_id,
             user_input,
@@ -1981,7 +1987,7 @@ impl ConversationTurnCoordinator {
         )
         .await;
         let reply = apply_resolved_provider_turn(
-            config,
+            turn_context.config(),
             runtime,
             session_id,
             user_input,
@@ -1994,6 +2000,7 @@ impl ConversationTurnCoordinator {
         Ok(Some(reply))
     }
 
+    #[cfg(test)]
     fn reload_followup_provider_config_after_tool_turn(
         config: &LoongClawConfig,
         turn: &ProviderTurn,
@@ -2606,7 +2613,7 @@ async fn request_provider_turn_with_observer<R: ConversationRuntime + ?Sized>(
 }
 
 async fn resolve_provider_turn<R: ConversationRuntime + ?Sized>(
-    config: &LoongClawConfig,
+    turn_context: &TurnContext,
     runtime: &R,
     session_id: &str,
     user_input: &str,
@@ -2617,7 +2624,7 @@ async fn resolve_provider_turn<R: ConversationRuntime + ?Sized>(
     ingress: Option<&ConversationIngressContext>,
     observer: Option<&ConversationTurnObserverHandle>,
 ) -> ResolvedProviderTurn {
-    let turn_loop_policy = ProviderTurnLoopPolicy::from_config(config);
+    let turn_loop_policy = ProviderTurnLoopPolicy::from_config(turn_context.config());
     let mut turn_loop_state = ProviderTurnLoopState::default();
 
     match decide_provider_turn_request_action(result, error_mode) {
@@ -2635,7 +2642,7 @@ async fn resolve_provider_turn<R: ConversationRuntime + ?Sized>(
                 );
             }
             let continue_phase = prepare_provider_turn_continue_phase(
-                config,
+                turn_context,
                 runtime,
                 session_id,
                 preparation,
@@ -2656,7 +2663,8 @@ async fn resolve_provider_turn<R: ConversationRuntime + ?Sized>(
                     user_input,
                     &turn_loop_policy,
                     &mut turn_loop_state,
-                    config
+                    turn_context
+                        .config()
                         .conversation
                         .turn_loop
                         .max_discovery_followup_rounds
@@ -2718,7 +2726,7 @@ fn build_turn_loop_circuit_breaker_resolved_turn(
 }
 
 async fn prepare_provider_turn_continue_phase<R: ConversationRuntime + ?Sized>(
-    config: &LoongClawConfig,
+    turn_context: &TurnContext,
     runtime: &R,
     session_id: &str,
     preparation: &ProviderTurnPreparation,
@@ -2730,6 +2738,7 @@ async fn prepare_provider_turn_continue_phase<R: ConversationRuntime + ?Sized>(
     observer: Option<&ConversationTurnObserverHandle>,
     provider_round: usize,
 ) -> ProviderTurnContinuePhase {
+    let config = turn_context.config();
     let tool_intents = turn.tool_intents.len();
     let lane = preparation.lane_plan.decision.lane;
     if tool_intents > 0 {
@@ -2739,7 +2748,7 @@ async fn prepare_provider_turn_continue_phase<R: ConversationRuntime + ?Sized>(
         observe_provider_turn_tool_batch_started(observer, &turn);
     }
     let lane_execution = execute_provider_turn_lane(
-        config,
+        turn_context,
         runtime,
         session_id,
         preparation,
@@ -2761,20 +2770,18 @@ async fn prepare_provider_turn_continue_phase<R: ConversationRuntime + ?Sized>(
     }
     observe_provider_turn_tool_batch_terminal(observer, &lane_execution.tool_events);
     let loop_verdict = turn_loop_state.observe_turn(turn_loop_policy, &turn);
-    let followup_config =
-        ConversationTurnCoordinator::reload_followup_provider_config_after_tool_turn(config, &turn);
     ProviderTurnContinuePhase::new(
         tool_intents,
         lane_execution,
         loop_verdict,
-        followup_config,
+        turn_context.clone(),
         ingress,
     )
 }
 
 async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
     runtime: &R,
-    config: &LoongClawConfig,
+    turn_context: &TurnContext,
     session_id: &str,
     preparation: &ProviderTurnPreparation,
     continue_phase: &ProviderTurnContinuePhase,
@@ -2926,21 +2933,6 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                         .map(|(initial, followup)| followup.saturating_sub(initial));
                     let followup_preparation =
                         current_preparation.for_followup_messages(follow_up_messages);
-                    let followup_tool_view = match runtime.tool_view(
-                        &current_continue_phase.followup_config,
-                        session_id,
-                        binding,
-                    ) {
-                        Ok(tool_view) => tool_view,
-                        Err(_error) => {
-                            let checkpoint = current_continue_phase.checkpoint(
-                                preparation,
-                                user_input,
-                                raw_reply.as_str(),
-                            );
-                            return ResolvedProviderTurn::persist_reply(raw_reply, checkpoint);
-                        }
-                    };
                     let followup_message_count = followup_preparation.session.messages.len();
                     let followup_context_estimated_tokens =
                         followup_preparation.session.estimated_tokens;
@@ -2971,12 +2963,12 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                     .await;
                     match decide_provider_turn_request_action(
                         request_provider_turn_with_observer(
-                            &current_continue_phase.followup_config,
+                            current_continue_phase.turn_context.config(),
                             runtime,
                             session_id,
                             followup_preparation.turn_id.as_str(),
                             &followup_preparation.session.messages,
-                            &followup_tool_view,
+                            current_continue_phase.turn_context.tool_view(),
                             binding,
                             observer,
                         )
@@ -3019,7 +3011,7 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                                 );
                             }
                             current_continue_phase = prepare_provider_turn_continue_phase(
-                                &current_continue_phase.followup_config,
+                                &current_continue_phase.turn_context,
                                 runtime,
                                 session_id,
                                 &followup_preparation,
@@ -3060,7 +3052,7 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                             )
                             .await;
                             emit_provider_failover_trust_event_if_needed(
-                                config,
+                                turn_context.config(),
                                 runtime,
                                 session_id,
                                 provider_error_text.as_str(),
@@ -3079,7 +3071,7 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                 if requires_completion_pass {
                     let reply = request_completion_with_raw_fallback(
                         runtime,
-                        &current_continue_phase.followup_config,
+                        current_continue_phase.turn_context.config(),
                         &follow_up_messages,
                         binding,
                         raw_reply.as_str(),
@@ -3111,7 +3103,7 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                 );
                 let reply = request_completion_with_raw_fallback(
                     runtime,
-                    &current_continue_phase.followup_config,
+                    current_continue_phase.turn_context.config(),
                     &guard_messages,
                     binding,
                     raw_reply.as_str(),
@@ -4726,7 +4718,7 @@ fn format_delegate_child_panic(panic_payload: Box<dyn Any + Send>) -> String {
 }
 
 async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
-    config: &LoongClawConfig,
+    turn_context: &TurnContext,
     runtime: &R,
     session_id: &str,
     preparation: &ProviderTurnPreparation,
@@ -4734,6 +4726,7 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
     binding: ConversationRuntimeBinding<'_>,
     ingress: Option<&ConversationIngressContext>,
 ) -> ProviderTurnLaneExecution {
+    let config = turn_context.config();
     let had_tool_intents = !turn.tool_intents.is_empty();
     let requires_provider_turn_followup = turn
         .tool_intents
@@ -4741,26 +4734,7 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
         .any(|intent| effective_followup_tool_name(intent) == "tool.search");
     let assistant_preface = turn.assistant_text.clone();
     let lane = preparation.lane_plan.decision.lane;
-    let session_context = match runtime.session_context(config, session_id, binding) {
-        Ok(session_context) => session_context,
-        Err(error) => {
-            let turn_result = TurnResult::non_retryable_tool_error("session_context_failed", error);
-            let tool_events = build_provider_turn_tool_terminal_events(turn, &turn_result, None);
-            let tool_request_summary =
-                summarize_provider_lane_tool_request(turn, &turn_result, None);
-            return ProviderTurnLaneExecution {
-                lane,
-                assistant_preface,
-                had_tool_intents,
-                tool_request_summary,
-                requires_provider_turn_followup,
-                raw_tool_output_requested: preparation.raw_tool_output_requested,
-                turn_result,
-                safe_lane_terminal_route: None,
-                tool_events,
-            };
-        }
-    };
+    let session_context = turn_context.session_context();
     let base_app_dispatcher = DefaultAppToolDispatcher::with_config(
         MemoryRuntimeConfig::from_memory_config(&config.memory),
         config.clone(),
@@ -4795,9 +4769,9 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
     );
     let validation = if use_safe_lane_plan_path {
         TurnEngine::with_tool_result_payload_summary_limit(usize::MAX, payload_summary_limit_chars)
-            .validate_turn_in_context(turn, &session_context)
+            .validate_turn_in_context(turn, session_context)
     } else {
-        engine.validate_turn_in_context(turn, &session_context)
+        engine.validate_turn_in_context(turn, session_context)
     };
     let (turn_result, safe_lane_terminal_route, fast_lane_tool_batch_trace) = match validation {
         Ok(TurnValidation::FinalText(text)) => (TurnResult::FinalText(text), None, None),
@@ -4809,7 +4783,7 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
                 session_id,
                 &preparation.lane_plan.decision,
                 turn,
-                &session_context,
+                session_context,
                 &app_dispatcher,
                 binding,
                 ingress,
@@ -4821,7 +4795,7 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
             let (result, trace) = engine
                 .execute_turn_in_context_with_trace(
                     turn,
-                    &session_context,
+                    session_context,
                     &app_dispatcher,
                     binding,
                     ingress,
@@ -6715,6 +6689,16 @@ mod tests {
         ))
     }
 
+    fn turn_context_for_test(config: &LoongClawConfig) -> TurnContext {
+        TurnContext::new(
+            Arc::new(config.clone()),
+            SessionContext::root_with_tool_view(
+                "turn-coordinator-test-session",
+                crate::tools::runtime_tool_view_from_loongclaw_config(config),
+            ),
+        )
+    }
+
     #[test]
     fn pending_approval_input_parser_accepts_keyword_and_numeric_aliases() {
         assert_eq!(
@@ -7190,6 +7174,145 @@ mod tests {
     }
 
     #[derive(Default)]
+    struct FrozenConfigFollowupRuntime {
+        request_turn_models: StdMutex<Vec<String>>,
+        request_turn_calls: StdMutex<usize>,
+        switched_config_path: StdMutex<Option<String>>,
+    }
+
+    impl FrozenConfigFollowupRuntime {
+        fn with_switched_config_path(path: String) -> Self {
+            Self {
+                switched_config_path: StdMutex::new(Some(path)),
+                ..Self::default()
+            }
+        }
+    }
+
+    #[async_trait]
+    impl ConversationRuntime for FrozenConfigFollowupRuntime {
+        fn session_context(
+            &self,
+            config: &LoongClawConfig,
+            session_id: &str,
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<SessionContext> {
+            Ok(SessionContext::root_with_tool_view(
+                session_id,
+                crate::tools::runtime_tool_view_from_loongclaw_config(config),
+            ))
+        }
+
+        async fn build_messages(
+            &self,
+            _config: &LoongClawConfig,
+            _session_id: &str,
+            _include_system_prompt: bool,
+            _tool_view: &crate::tools::ToolView,
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<Vec<Value>> {
+            Ok(vec![json!({
+                "role": "system",
+                "content": "coordinator frozen config followup test"
+            })])
+        }
+
+        async fn request_completion(
+            &self,
+            _config: &LoongClawConfig,
+            _messages: &[Value],
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<String> {
+            Ok("completion fallback".to_owned())
+        }
+
+        async fn request_turn(
+            &self,
+            config: &LoongClawConfig,
+            _session_id: &str,
+            _turn_id: &str,
+            _messages: &[Value],
+            _tool_view: &crate::tools::ToolView,
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<ProviderTurn> {
+            self.request_turn_models
+                .lock()
+                .expect("request turn models lock should not be poisoned")
+                .push(config.provider.model.clone());
+
+            let mut calls = self
+                .request_turn_calls
+                .lock()
+                .expect("request turn calls lock should not be poisoned");
+            let current_call = *calls;
+            *calls += 1;
+
+            if current_call == 0 {
+                let switched_config_path = self
+                    .switched_config_path
+                    .lock()
+                    .expect("switched config path lock should not be poisoned")
+                    .clone()
+                    .expect("switched config path should be set");
+                Ok(ProviderTurn {
+                    assistant_text: "checking tools before switching".to_owned(),
+                    tool_intents: vec![
+                        ToolIntent {
+                            tool_name: "tool.search".to_owned(),
+                            args_json: json!({"query":"read file"}),
+                            source: "provider_tool_call".to_owned(),
+                            session_id: String::new(),
+                            turn_id: String::new(),
+                            tool_call_id: "call-followup-search".to_owned(),
+                        },
+                        ToolIntent {
+                            tool_name: "provider.switch".to_owned(),
+                            args_json: json!({
+                                "selector": "openai",
+                                "config_path": switched_config_path
+                            }),
+                            source: "provider_tool_call".to_owned(),
+                            session_id: String::new(),
+                            turn_id: String::new(),
+                            tool_call_id: "call-provider-switch".to_owned(),
+                        },
+                    ],
+                    raw_meta: Value::Null,
+                })
+            } else {
+                Ok(ProviderTurn {
+                    assistant_text: "followup stayed on frozen config".to_owned(),
+                    tool_intents: Vec::new(),
+                    raw_meta: Value::Null,
+                })
+            }
+        }
+
+        async fn request_turn_streaming(
+            &self,
+            _config: &LoongClawConfig,
+            _session_id: &str,
+            _turn_id: &str,
+            _messages: &[Value],
+            _tool_view: &crate::tools::ToolView,
+            _binding: ConversationRuntimeBinding<'_>,
+            _on_token: crate::provider::StreamingTokenCallback,
+        ) -> CliResult<ProviderTurn> {
+            panic!("request_turn_streaming should not be called in frozen config followup test")
+        }
+
+        async fn persist_turn(
+            &self,
+            _session_id: &str,
+            _role: &str,
+            _content: &str,
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<()> {
+            Ok(())
+        }
+    }
+
+    #[derive(Default)]
     struct RecordingTurnObserver {
         phase_events: StdMutex<Vec<ConversationTurnPhaseEvent>>,
         tool_events: StdMutex<Vec<ConversationTurnToolEvent>>,
@@ -7349,6 +7472,69 @@ mod tests {
             token_events.is_empty(),
             "unsupported transports should not emit streaming token events: {token_events:#?}"
         );
+    }
+
+    #[tokio::test]
+    async fn coordinator_followup_round_does_not_reload_config_mid_turn() {
+        use std::fs;
+
+        let root = std::env::temp_dir().join(format!(
+            "loongclaw-coordinator-frozen-followup-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("create fixture root");
+        let switched_config_path = root.join("loongclaw-switched.toml");
+
+        let mut switched = LoongClawConfig::default();
+        switched.provider.model = "switched-followup-model".to_owned();
+        fs::write(
+            &switched_config_path,
+            crate::config::render(&switched).expect("render switched config"),
+        )
+        .expect("write switched config");
+
+        let mut config = LoongClawConfig::default();
+        config.provider.model = "frozen-base-model".to_owned();
+        config.conversation.turn_loop.max_discovery_followup_rounds = 2;
+
+        let runtime = FrozenConfigFollowupRuntime::with_switched_config_path(
+            switched_config_path.display().to_string(),
+        );
+        let coordinator = ConversationTurnCoordinator::new();
+        let acp_options = AcpConversationTurnOptions::automatic();
+        let address = ConversationSessionAddress::from_session_id("frozen-followup-session");
+
+        let reply = coordinator
+            .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer(
+                &config,
+                &address,
+                "search first, then switch provider config",
+                ProviderErrorMode::Propagate,
+                &runtime,
+                &acp_options,
+                ConversationRuntimeBinding::direct(),
+                None,
+                None,
+            )
+            .await
+            .expect("coordinator followup turn should succeed");
+
+        assert_eq!(reply, "followup stayed on frozen config");
+
+        let models = runtime
+            .request_turn_models
+            .lock()
+            .expect("request turn models lock should not be poisoned")
+            .clone();
+        assert_eq!(models.len(), 2, "expected initial and followup provider rounds");
+        assert_eq!(models[0], "frozen-base-model");
+        assert_eq!(models[1], "frozen-base-model");
+
+        fs::remove_dir_all(&root).ok();
     }
 
     #[tokio::test]
@@ -9118,7 +9304,7 @@ mod tests {
                 tool_events: Vec::new(),
             },
             None,
-            config,
+            turn_context_for_test(&config),
             None,
         );
 
@@ -9331,7 +9517,7 @@ mod tests {
                 tool_events: Vec::new(),
             },
             None,
-            LoongClawConfig::default(),
+            turn_context_for_test(&LoongClawConfig::default()),
             None,
         );
 
